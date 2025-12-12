@@ -20,7 +20,7 @@
 // PIPE SETTINGS
 #define PIPE_WIDTH    70
 #define MAX_PIPES     100  // Maximum buffer size (safety limit)
-#define MAX_LEVELS    3    // Total number of levels
+#define MAX_LEVELS    2    // Total number of levels
 
 // DATA STRUCTURE FOR A LEVEL
 typedef struct {
@@ -48,15 +48,15 @@ void SetupLevels() {
     levels[0].color     = SKYBLUE;
 
     // ---------------- LEVEL 2 (Moving Pipes) ----------------
-    levels[0].score     = 0;
+    levels[1].score     = 0;
     levels[1].pipeCount = 10;
     levels[1].speed     = 3.5f;
-    levels[1].gapSize   = 140.0f;
+    levels[1].gapSize   = 160.0f;
     levels[1].gravity   = 0.45f;
     levels[1].color     = LIME;
 
-    // ---------------- LEVEL 3 (Placeholder) ----------------
-    levels[0].score     = 0;
+    // ---------------- LEVEL 3 (not used) ----------------
+    levels[2].score     = 0;
     levels[2].pipeCount = 20;
     levels[2].speed     = 5.0f;
     levels[2].gapSize   = 120.0f;
@@ -150,7 +150,6 @@ void ChangeState(int newLevelIndex) {
     gameStarted = false;
     gameOver = false;
     levelComplete = false;
-    gameVictory = false;
 
     ResetEntityPositions();
 }
@@ -294,13 +293,13 @@ void DrawGame() {
         DrawText("GAME OVER", 300, 200, 40, RED);
         DrawText("Press SPACE to Retry", 280, 250, 20, WHITE);
     }
+        else if (gameVictory) {
+        DrawText("YOU WIN!", 300, 200, 40, GOLD);
+        DrawText("Press SPACE to Restart Game", 260, 250, 20, WHITE);
+    }
     else if (levelComplete) {
         DrawText("LEVEL COMPLETE!", 250, 200, 40, GREEN);
         DrawText("Press SPACE for Next Level", 260, 250, 20, WHITE);
-    }
-    else if (gameVictory) {
-        DrawText("YOU WIN!", 300, 200, 40, GOLD);
-        DrawText("Press SPACE to Restart Game", 260, 250, 20, WHITE);
     }
     else if (!gameStarted) {
         DrawText(TextFormat("LEVEL %d", currentLevel + 1), 340, 180, 30, cur.color);
@@ -340,15 +339,15 @@ int main(void) {
                 currentScore = totalScore; // Retry same level
                 levels[currentLevel].score = 0; // Reset level point
             }
+            else if (gameVictory) {
+                ChangeState(currentLevel + 1);
+                totalScore += currentScore+totalScore;
+            }
             else if (levelComplete) {
                 ChangeState(currentLevel + 1);
                 totalScore += currentScore-totalScore; // Next level
             }
-            else if (gameVictory) {
-                ChangeState(0);
-                currentScore = 0;
-                totalScore = 0; // Restart game
-            }
+
         }
 
         UpdateGame();
