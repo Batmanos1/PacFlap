@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <stdio.h>
+#include <string.h>
 
 // ==========================================
 //          GLOBAL CONFIGURATION
@@ -14,66 +15,59 @@
 
 // PLAYER SETTINGS
 #define PACMAN_RADIUS 20.0f
-#define JUMP_STRENGTH -5.0f
+#define JUMP_STRENGTH -6.0f
 #define PACMAN_X_POS  SCREEN_WIDTH / 4.0f
 
 // PIPE SETTINGS
 #define PIPE_WIDTH    70
-#define MAX_PIPES     100  // Maximum buffer size (safety limit)
-#define MAX_LEVELS    2    // Total number of levels
+#define MAX_PIPES     100
+#define MAX_LEVELS    2
+#define MAX_PLAYERS   10
 
-// DATA STRUCTURE FOR A LEVEL
+// ==========================================
+//          DATA STRUCTURES
+// ==========================================
+
+// Game State Enum
+typedef enum {
+    STATE_INPUT,        // Entering name
+    STATE_TITLE,        // Press Space to start level
+    STATE_PLAYING,      // Game active
+    STATE_LEVEL_DONE,   // Level beat
+    STATE_GAMEOVER,     // Died
+    STATE_VICTORY       // All levels beat (Scoreboard)
+} GameState;
+
 typedef struct {
-    int pipeCount;      // How many pipes to pass to beat level
-    int score;          // Level Score
-    float speed;        // How fast the pipes move
-    float gapSize;      // Vertical space between pipes
-    float gravity;      // Gravity strength
-    Color color;        // Pipe color
+    int pipeCount;
+    float speed;
+    float gapSize;
+    float gravity;
+    Color color;
 } LevelData;
 
-LevelData levels[MAX_LEVELS]; // Array to hold our levels
+typedef struct {
+    char name[16];
+    int score;
+    bool active;
+} PlayerData;
 
-// ==========================================
-//          LEVEL SETUP
-// ==========================================
-
-void SetupLevels() {
-    // ---------------- LEVEL 1 ----------------
-    levels[0].score     = 0;
-    levels[0].pipeCount = 5;
-    levels[0].speed     = 3.0f;
-    levels[0].gapSize   = 160.0f;
-    levels[0].gravity   = 0.4f;
-    levels[0].color     = SKYBLUE;
-
-    // ---------------- LEVEL 2 (Moving Pipes) ----------------
-    levels[1].score     = 0;
-    levels[1].pipeCount = 10;
-    levels[1].speed     = 3.5f;
-    levels[1].gapSize   = 160.0f;
-    levels[1].gravity   = 0.45f;
-    levels[1].color     = LIME;
-
-    // ---------------- LEVEL 3 (not used) ----------------
-    levels[2].score     = 0;
-    levels[2].pipeCount = 20;
-    levels[2].speed     = 5.0f;
-    levels[2].gapSize   = 120.0f;
-    levels[2].gravity   = 0.5f;
-    levels[2].color     = RED;
-}
+LevelData levels[MAX_LEVELS];
+PlayerData players[MAX_PLAYERS];
+int playerCount = 0;
 
 // ==========================================
 //          GAME VARIABLES
 // ==========================================
 
-// State
+GameState currentState = STATE_INPUT;
 int currentLevel = 0;
-bool gameStarted = false;
-bool gameOver = false;
-bool levelComplete = false;
-bool gameVictory = false;
+
+// Current Player Info
+char tempName[16] = "\0";
+int letterCount = 0;
+int currentSessionScore = 0;
+int levelStartScore = 0;
 
 // Entities
 float pacmanY;
@@ -84,22 +78,30 @@ float animationTime = 0.0f;
 // Pipe Arrays
 float pipeX[MAX_PIPES];
 float pipeGapY[MAX_PIPES];
-float initialPipeGapY[MAX_PIPES]; // Stores the starting Y for sine wave calculations
+float initialPipeGapY[MAX_PIPES];
 bool pipePassed[MAX_PIPES];
 bool orbCollected[MAX_PIPES];
-
-// Orb Arrays (New)
-// The "Relative" Y position.
-// if orbRelY is 50, the orb is 50px below the top pipe.
 float orbRelY[MAX_PIPES];
 
-// Scores
-int currentScore = 0;
-int totalScore = 0;
+// ==========================================
+//          SETUP FUNCTIONS
+// ==========================================
 
-// ==========================================
-//            LOGIC FUNCTIONS
-// ==========================================
+void SetupLevels() {
+    // ---------------- LEVEL 1 ----------------
+    levels[0].pipeCount = 5;
+    levels[0].speed     = 3.0f;
+    levels[0].gapSize   = 160.0f;
+    levels[0].gravity   = 0.4f;
+    levels[0].color     = SKYBLUE;
+
+    // ---------------- LEVEL 2 (Moving Pipes) ----------------
+    levels[1].pipeCount = 10;
+    levels[1].speed     = 3.5f;
+    levels[1].gapSize   = 150.0f;
+    levels[1].gravity   = 0.45f;
+    levels[1].color     = LIME;
+}
 
 void ResetEntityPositions() {
     LevelData cur = levels[currentLevel];
@@ -108,59 +110,124 @@ void ResetEntityPositions() {
     pacmanVelocityY = 0;
     animationTime = 0;
 
-    // Generate Pipes based on current level settings
+    // Generate Pipes
     for (int i = 0; i < cur.pipeCount; i++) {
-        pipeX[i] = SCREEN_WIDTH + 300 + (i * 300); // Start off-screen
+        pipeX[i] = SCREEN_WIDTH + 300 + (i * 300);
 
         int minGap = 50;
         int maxGap = SCREEN_HEIGHT - 50 - (int)cur.gapSize;
-        if (maxGap < minGap) maxGap = minGap + 10; // Safety check
+        if (maxGap < minGap) maxGap = minGap + 10;
 
-        // Store the random position for the gap
         float randomY = minGap + rand() % (maxGap - minGap);
 
         pipeGapY[i] = randomY;
-        initialPipeGapY[i] = randomY; // Save this for the sine wave reference
+        initialPipeGapY[i] = randomY;
 
-        // --- CALCULATE ORB POSITION ---
-        // somewhere inside the gap.
-        // a padding of 20px so it's not inside the wall.
-        orbCollected[i] = false; // Reset orb state
+        // Orb Logic
+        orbCollected[i] = false;
         int padding = 20;
         int safeRange = (int)cur.gapSize - (padding * 2);
 
         if (safeRange > 0) {
             orbRelY[i] = padding + (rand() % safeRange);
         } else {
-            orbRelY[i] = cur.gapSize / 2; // Exact center if gap is tight
+            orbRelY[i] = cur.gapSize / 2;
         }
 
         pipePassed[i] = false;
     }
 }
 
-// Handles switching levels or restarting
-void ChangeState(int newLevelIndex) {
-    if (newLevelIndex >= MAX_LEVELS) {
-        gameVictory = true;
+// ==========================================
+//          UPDATE LOGIC
+// ==========================================
+
+void UpdateInput() {
+    int key = GetCharPressed();
+
+    while (key > 0) {
+        if ((key >= 32) && (key <= 125) && (letterCount < 15)) {
+            tempName[letterCount] = (char)key;
+            tempName[letterCount+1] = '\0';
+            letterCount++;
+        }
+        key = GetCharPressed();
+    }
+
+    if (IsKeyPressed(KEY_BACKSPACE)) {
+        letterCount--;
+        if (letterCount < 0) letterCount = 0;
+        tempName[letterCount] = '\0';
+    }
+
+    if (IsKeyPressed(KEY_ENTER) && letterCount > 0) {
+        currentState = STATE_TITLE;
+        currentSessionScore = 0;
+        levelStartScore = 0;
+        currentLevel = 0;
+        ResetEntityPositions();
+    }
+}
+
+void UpdateGame() {
+    if (currentState == STATE_INPUT) {
+        UpdateInput();
         return;
     }
 
-    currentLevel = newLevelIndex;
-    gameStarted = false;
-    gameOver = false;
-    levelComplete = false;
+    // State Transitions via Spacebar
+    if (IsKeyPressed(KEY_SPACE)) {
+        if (currentState == STATE_TITLE) {
+            currentState = STATE_PLAYING;
+            pacmanVelocityY = JUMP_STRENGTH;
+        }
+        else if (currentState == STATE_LEVEL_DONE) {
+            currentLevel++;
+            if (currentLevel >= MAX_LEVELS) {
+                // VICTORY LOGIC
+                currentState = STATE_VICTORY;
 
-    ResetEntityPositions();
-}
+                // 1. Add Player to Scoreboard
+                if (playerCount < MAX_PLAYERS) {
+                    strcpy(players[playerCount].name, tempName);
+                    players[playerCount].score = currentSessionScore;
+                    players[playerCount].active = true;
+                    playerCount++;
+                }
 
+                // 2. SORT SCOREBOARD (Bubble Sort: Highest to Lowest)
+                for (int i = 0; i < playerCount - 1; i++) {
+                    for (int j = 0; j < playerCount - i - 1; j++) {
+                        if (players[j].score < players[j+1].score) {
+                            // Swap entire struct
+                            PlayerData temp = players[j];
+                            players[j] = players[j+1];
+                            players[j+1] = temp;
+                        }
+                    }
+                }
 
-// ==========================================
-//         UPDATE GAME (CHECKS)
-// ==========================================
+            } else {
+                currentState = STATE_TITLE;
+                levelStartScore = currentSessionScore;
+                ResetEntityPositions();
+            }
+        }
+        else if (currentState == STATE_GAMEOVER) {
+            // Retry Level
+            currentSessionScore = levelStartScore;
+            currentState = STATE_TITLE;
+            ResetEntityPositions();
+        }
+        else if (currentState == STATE_VICTORY) {
+            // Return to input screen for new player
+            currentState = STATE_INPUT;
+            letterCount = 0;
+            tempName[0] = '\0';
+        }
+    }
 
-void UpdateGame() {
-    if (!gameStarted || gameOver || levelComplete || gameVictory) return;
+    if (currentState != STATE_PLAYING) return;
 
     LevelData cur = levels[currentLevel];
 
@@ -173,71 +240,61 @@ void UpdateGame() {
     animationTime += GetFrameTime() * 10.0f;
     currentMouthAngle = 25.0f + 20.0f * sinf(animationTime);
 
-    // Floor/Ceiling Collision
+    // Bounds Collision
     if (pacmanY - PACMAN_RADIUS <= 0 || pacmanY + PACMAN_RADIUS >= SCREEN_HEIGHT) {
-        gameOver = true;
+        currentState = STATE_GAMEOVER;
     }
 
     // 2. Update Pipes
-    int pipesCleared = 0;
+    int pipesClearedCount = 0;
 
     for (int i = 0; i < cur.pipeCount; i++) {
         pipeX[i] -= cur.speed;
 
-        // --- LEVEL 2 MECHANIC: SINE WAVE PIPES ---
+        // Level 2 Sine Wave
         if (currentLevel == 1) {
             float time = GetTime();
-            float amplitude = 50.0f; // Range of motion (up/down pixels)
-            float speed = 3.0f;      // Speed of oscillation
-
-            // We use 'i' in the sine calculation to offset the waves so they don't move in unison
-            pipeGapY[i] = initialPipeGapY[i] + sinf(time * speed + i) * amplitude;
+            pipeGapY[i] = initialPipeGapY[i] + sinf(time * 3.0f + i) * 50.0f;
         }
 
-        // Collision Check
+        // Collision Rectangles
         Rectangle topPipe = { pipeX[i], 0, PIPE_WIDTH, pipeGapY[i] };
         Rectangle botPipe = { pipeX[i], pipeGapY[i] + cur.gapSize, PIPE_WIDTH, SCREEN_HEIGHT };
         Rectangle player  = { PACMAN_X_POS - PACMAN_RADIUS + 5, pacmanY - PACMAN_RADIUS + 5, PACMAN_RADIUS*2 - 10, PACMAN_RADIUS*2 - 10 };
 
         if (CheckCollisionRecs(topPipe, player) || CheckCollisionRecs(botPipe, player)) {
-            gameOver = true;
+            currentState = STATE_GAMEOVER;
         }
 
-        // --- ORB COLLISION ---
-        // Only check if not already collected
+        // Orb Collection
         if (!orbCollected[i]) {
             Rectangle orbHitbox = {
                 pipeX[i] + (PIPE_WIDTH / 2) - 5,
                 pipeGapY[i] + orbRelY[i] - 5,
                 10, 10
             };
-
             if (CheckCollisionRecs(player, orbHitbox)) {
-                orbCollected[i] = true; // Mark as collected
-                levels[currentLevel].score += 5; // Increase points
-                currentScore += 5; // update points
+                orbCollected[i] = true;
+                currentSessionScore += 5;
             }
         }
 
-        // Pipes cleared check
+        // Score Update (Passing Pipe)
         if (!pipePassed[i] && pipeX[i] + PIPE_WIDTH < PACMAN_X_POS) {
             pipePassed[i] = true;
-            levels[currentLevel].score ++; // Increase points
-            currentScore ++; // update points
+            currentSessionScore += 1;
         }
 
-        if (pipePassed[i]) pipesCleared++;
+        if (pipePassed[i]) pipesClearedCount++;
     }
 
-    if (pipesCleared >= cur.pipeCount) {
-        levelComplete = true;
-        totalScore+=levels[currentLevel].score;
+    if (pipesClearedCount >= cur.pipeCount) {
+        currentState = STATE_LEVEL_DONE;
     }
 }
 
-
 // ==========================================
-//         DRAW GAME (SHAPES)
+//          DRAWING
 // ==========================================
 
 void DrawGame() {
@@ -247,109 +304,108 @@ void DrawGame() {
     LevelData cur = levels[currentLevel];
     int border = 4; // Outline thickness
 
-    // 1. DRAW PIPES and ORBS
-    for (int i = 0; i < cur.pipeCount; i++) {
-        if (pipeX[i] > -PIPE_WIDTH && pipeX[i] < SCREEN_WIDTH) {
-            // Top Pipe
-            DrawRectangle(pipeX[i], 0, PIPE_WIDTH, pipeGapY[i], cur.color);
-            DrawRectangle(pipeX[i] + border, 0, PIPE_WIDTH - border*2, pipeGapY[i] - border, BLACK);
+    if (currentState == STATE_INPUT) {
+        DrawText("WELCOME TO FLAPPY PACMAN", 160, 100, 30, YELLOW);
+        DrawText("Enter your name:", 300, 200, 20, WHITE);
 
-            // Bottom Pipe
-            float bottomY = pipeGapY[i] + cur.gapSize;
-            float bottomHeight = SCREEN_HEIGHT - bottomY;
-            DrawRectangle(pipeX[i], bottomY, PIPE_WIDTH, bottomHeight, cur.color);
-            DrawRectangle(pipeX[i] + border, bottomY + border, PIPE_WIDTH - border*2, bottomHeight - border, BLACK);
+        // Draw Input Box
+        DrawRectangleLines(250, 230, 300, 40, WHITE);
+        DrawText(tempName, 260, 240, 20, YELLOW);
 
-            // Orbs
-            // Position = Top of gap + Calculated Offset
-            // Only draw if NOT collected
-            if (!orbCollected[i]) {
-                float finalOrbY = pipeGapY[i] + orbRelY[i];
-                DrawCircle(pipeX[i] + (PIPE_WIDTH/2), finalOrbY, 5, WHITE);
+        // Blinking cursor
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawText("_", 260 + MeasureText(tempName, 20), 240, 20, YELLOW);
+        }
+
+        DrawText("Press ENTER to Start", 280, 300, 20, DARKGRAY);
+    }
+    else if (currentState == STATE_VICTORY) {
+        DrawText("YOU WIN!", 300, 50, 40, GOLD);
+        DrawText("SCOREBOARD (Top 10)", 280, 120, 20, WHITE);
+        DrawLine(280, 145, 520, 145, WHITE);
+
+        for (int i = 0; i < playerCount; i++) {
+            Color textColor = WHITE;
+            // Highlight the current player's new score
+            if (strcmp(players[i].name, tempName) == 0 && players[i].score == currentSessionScore) {
+                textColor = YELLOW;
+            }
+
+            DrawText(TextFormat("%d. %s", i+1, players[i].name), 280, 160 + (i * 30), 20, textColor);
+            DrawText(TextFormat("%d", players[i].score), 480, 160 + (i * 30), 20, textColor);
+        }
+
+        DrawText("Press SPACE to Play Again", 260, 420, 20, DARKGRAY);
+    }
+    else {
+        // Draw Game Elements (Pipes, Orbs, Player)
+
+        // 1. Pipes
+        for (int i = 0; i < cur.pipeCount; i++) {
+            if (pipeX[i] > -PIPE_WIDTH && pipeX[i] < SCREEN_WIDTH) {
+                // Top Pipe
+                DrawRectangle(pipeX[i], 0, PIPE_WIDTH, pipeGapY[i], cur.color);
+                DrawRectangle(pipeX[i] + border, 0, PIPE_WIDTH - border*2, pipeGapY[i] - border, BLACK);
+
+                // Bottom Pipe
+                float bottomY = pipeGapY[i] + cur.gapSize;
+                float bottomHeight = SCREEN_HEIGHT - bottomY;
+                DrawRectangle(pipeX[i], bottomY, PIPE_WIDTH, bottomHeight, cur.color);
+                DrawRectangle(pipeX[i] + border, bottomY + border, PIPE_WIDTH - border*2, bottomHeight - border, BLACK);
+
+                // Orbs
+                if (!orbCollected[i]) {
+                     float finalOrbY = pipeGapY[i] + orbRelY[i];
+                     DrawCircle(pipeX[i] + (PIPE_WIDTH/2), finalOrbY, 5, WHITE);
+                }
             }
         }
+
+        // 2. Pacman
+        float tilt = pacmanVelocityY * 3.0f;
+        if (tilt > 35.0f) tilt = 35.0f;
+        if (tilt < -25.0f) tilt = -25.0f;
+
+        DrawCircleSector((Vector2){PACMAN_X_POS, pacmanY}, PACMAN_RADIUS,
+                        currentMouthAngle + tilt, (360.0f - currentMouthAngle) + tilt, 0, YELLOW);
+
+        // 3. UI Overlays
+        DrawText(TextFormat("Score: %d", currentSessionScore), 10, 10, 20, WHITE);
+        DrawText(TextFormat("Level: %d", currentLevel + 1), 10, 35, 20, cur.color);
+
+        if (currentState == STATE_GAMEOVER) {
+            DrawText("GAME OVER", 280, 200, 40, RED);
+            DrawText("Press SPACE to Retry Level", 260, 250, 20, WHITE);
+        }
+        else if (currentState == STATE_LEVEL_DONE) {
+            DrawText("LEVEL COMPLETE!", 230, 200, 40, GREEN);
+            DrawText("Press SPACE for Next Level", 260, 250, 20, WHITE);
+        }
+        else if (currentState == STATE_TITLE) {
+            DrawText(TextFormat("LEVEL %d", currentLevel + 1), 340, 180, 30, cur.color);
+            DrawText("Press SPACE to Fly", 300, 230, 20, WHITE);
+        }
     }
-
-    // 2. DRAW PAC-MAN
-
-    // Calculate rotation based on velocity
-    // Multiplier 3.0f makes the rotation more noticeable.
-    float tilt = pacmanVelocityY * 3.0f;
-
-    // Clamp the rotation so it doesn't look completely backwards or breaks its neck
-    if (tilt > 35.0f) tilt = 35.0f;   // Max looking down
-    if (tilt < -25.0f) tilt = -25.0f; // Max looking up
-
-    // Yellow circle being's shape
-    DrawCircleSector((Vector2){PACMAN_X_POS, pacmanY}, PACMAN_RADIUS,
-
-                      currentMouthAngle + tilt,            // Start Angle
-                      (360.0f - currentMouthAngle) + tilt, // End Angle
-                      0, YELLOW);
-
-
-    // 3. UI TEXT
-    if (gameOver) {
-        DrawText("GAME OVER", 300, 200, 40, RED);
-        DrawText("Press SPACE to Retry", 280, 250, 20, WHITE);
-    }
-        else if (gameVictory) {
-        DrawText("YOU WIN!", 300, 200, 40, GOLD);
-        DrawText("Press SPACE to Restart Game", 260, 250, 20, WHITE);
-    }
-    else if (levelComplete) {
-        DrawText("LEVEL COMPLETE!", 250, 200, 40, GREEN);
-        DrawText("Press SPACE for Next Level", 260, 250, 20, WHITE);
-    }
-    else if (!gameStarted) {
-        DrawText(TextFormat("LEVEL %d", currentLevel + 1), 340, 180, 30, cur.color);
-        DrawText("Press SPACE to Start", 290, 230, 20, WHITE);
-    }
-
-    DrawText(TextFormat("Lvl: %d", currentLevel + 1), 10, 10, 20, WHITE);
-    DrawText (TextFormat ("Score: %d", currentScore), 10, 40, 20, YELLOW);
 
     EndDrawing();
 }
 
-
 // ==========================================
-//              MAIN
+//          MAIN
 // ==========================================
 
 int main(void) {
     srand(time(NULL));
 
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "IDAPP");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Flappy Pacman - Scoreboard Edition");
     SetTargetFPS(FPS);
 
     SetupLevels();
-    ChangeState(0); // Load Level 1
+
+    // Initialize empty players
+    for(int i=0; i<MAX_PLAYERS; i++) players[i].active = false;
 
     while (!WindowShouldClose()) {
-
-        // Input Handling
-        if (IsKeyPressed(KEY_SPACE)) {
-            if (!gameStarted && !gameOver && !levelComplete && !gameVictory) {
-                gameStarted = true;
-                pacmanVelocityY = JUMP_STRENGTH;
-            }
-            else if (gameOver) {
-                ChangeState(currentLevel);
-                currentScore = totalScore; // Retry same level
-                levels[currentLevel].score = 0; // Reset level point
-            }
-            else if (gameVictory) {
-                ChangeState(currentLevel + 1);
-                totalScore += currentScore+totalScore;
-            }
-            else if (levelComplete) {
-                ChangeState(currentLevel + 1);
-                totalScore += currentScore-totalScore; // Next level
-            }
-
-        }
-
         UpdateGame();
         DrawGame();
     }
