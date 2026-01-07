@@ -1,0 +1,9 @@
+# depslib dependency file v1.0
+1765886596 source:c:\users\kamar\desktop\university\flappy pacman\flappypacman\main.c
+	"raylib.h"
+	<math.h>
+	<stdlib.h>
+	<time.h>
+	<stdio.h>
+	<string.h>
+
